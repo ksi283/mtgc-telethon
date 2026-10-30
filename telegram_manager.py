@@ -31,6 +31,7 @@ from telethon.errors import (
 from telethon.tl.types import Channel, Chat, User
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, "frozen", False)  # True khi chạy từ file .exe đã đóng gói
 
 def _env_int(name, default):
     """Đọc số nguyên không âm từ biến môi trường. Giá trị sai thì dùng mặc định thay vì làm app không chạy"""
@@ -258,11 +259,15 @@ def run_in_workers(kind, jobs, workers, label, results):
         "api_id": client.api_id,
         "api_hash": client.api_hash,
     }
-    # PYTHONPATH giữ nguyên đường dẫn của tiến trình chính để tiến trình con import được cùng các module.
     # UTF-8 cho đường ống để tiếng Việt không bị sai trên hệ điều hành dùng bảng mã khác
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p),
-               PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-    script = os.path.join(REPO_DIR, "tg_workers.py")
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    if FROZEN:
+        # Đã đóng gói thì sys.executable là chính file .exe, nên tiến trình con chạy lại nó với --tg-worker
+        cmd = [sys.executable, "--tg-worker"]
+    else:
+        # PYTHONPATH giữ nguyên đường dẫn của tiến trình chính để tiến trình con import được cùng các module
+        env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+        cmd = [sys.executable, os.path.join(REPO_DIR, "tg_workers.py")]
     pending = queue.Queue()
     for i, job in enumerate(jobs):
         pending.put((i, {"kind": kind, **job}))
@@ -272,7 +277,7 @@ def run_in_workers(kind, jobs, workers, label, results):
     def serve():
         try:
             proc = subprocess.Popen(
-                [sys.executable, script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 env=env, text=True, encoding="utf-8",
             )
         except OSError as e:
@@ -1316,7 +1321,7 @@ def render_people_tab(groups):
         "Ứng dụng kiểm tra từng nhóm, kênh để xem các tài khoản này có đang tham gia không."
     )
     with st.form("people_form"):
-        text = st.text_area("Username", placeholder="Ví dụ: @KienTDT, @user2", label_visibility="collapsed")
+        text = st.text_area("Username", placeholder="Ví dụ: @user1, @user2", label_visibility="collapsed")
         submitted = st.form_submit_button("🔎 Quét nhóm, kênh", type="primary")
 
     if submitted:
