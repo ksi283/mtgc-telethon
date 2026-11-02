@@ -30,7 +30,8 @@ a = Analysis(
     [os.path.join(ROOT, "launcher.py")],
     pathex=[ROOT],
     binaries=telethon_binaries,
-    datas=telethon_datas + [(os.path.join(ROOT, "assets"), "assets")],
+    datas=telethon_datas + [(os.path.join(ROOT, "assets"), "assets"),
+                            (os.path.join(ROOT, "pyproject.toml"), ".")],  # tên và phiên bản hiện trên chân cửa sổ
     hiddenimports=hiddenimports,
     hookspath=[],
     excludes=EXCLUDES,

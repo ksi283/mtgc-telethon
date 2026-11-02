@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from collections import Counter, deque
 from contextlib import closing
 from datetime import datetime, timezone
@@ -31,7 +32,8 @@ from telethon.errors import (
     PhoneNumberInvalidError,
     SessionPasswordNeededError,
 )
-from telethon.tl.types import Channel, Chat, User
+from telethon.tl import functions
+from telethon.tl.types import Channel, Chat, InputPeerUser, User
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)  # True khi chạy từ file .exe đã đóng gói
@@ -43,6 +45,7 @@ QR_SESSION_FILE = QR_SESSION + ".session"
 QR_TIMEOUT = 300  # giây chờ quét QR trước khi hủy
 
 FILTER_TYPES = {"Tất cả": None, "Nhóm": "Group", "Kênh": "Channel"}
+BOT_TYPE = "Bot"  # bot trong danh sách trò chuyện, tab Bot Telegram; không nằm trong bộ lọc Nhóm/Kênh
 MODE_ANY = "Có ít nhất một tài khoản"
 MODE_ALL = "Có tất cả tài khoản"
 MAX_PEOPLE = 5  # số tài khoản tối đa trong một lần quét
@@ -90,6 +93,18 @@ def submit(coro):
 def run_async(coro):
     """Chạy coroutine trên event loop nền và chờ kết quả. Gọi từ luồng nền, không gọi từ luồng giao diện"""
     return submit(coro).result()
+
+
+def project_info():
+    """Tên và phiên bản của ứng dụng, đọc từ pyproject.toml. File này được đóng gói kèm file exe.
+    Không đọc được thì trả về tên mặc định và phiên bản rỗng"""
+    base = sys._MEIPASS if FROZEN else REPO_DIR
+    try:
+        with open(os.path.join(base, "pyproject.toml"), "rb") as f:
+            project = tomllib.load(f)["project"]
+        return project["name"], project["version"]
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        return "TelegramManager", ""
 
 
 class QRTimeout(Exception):
@@ -170,13 +185,27 @@ class TelegramManager:
         """Xác thực bằng mật khẩu 2FA"""
         await self.client.sign_in(password=password)
 
-    async def get_groups_and_channels(self):
-        """Lấy danh sách nhóm và kênh đang tham gia. Bỏ qua mục đã rời, và bản cũ của nhóm đã chuyển thành siêu nhóm"""
+    async def get_dialog_lists(self):
+        """Lấy danh sách hội thoại: nhóm, kênh đang tham gia và bot trong danh sách trò chuyện.
+        Bỏ qua mục đã rời, và bản cũ của nhóm đã chuyển thành siêu nhóm"""
         dialogs = await self.client.get_dialogs()
-        groups_channels = []
+        groups_channels, bots = [], []
 
         for dialog in dialogs:
             entity = dialog.entity
+            date = dialog.date.astimezone().strftime("%d/%m/%Y %H:%M") if dialog.date else ""
+            if isinstance(entity, User):
+                if entity.bot:
+                    bots.append({
+                        "id": entity.id,
+                        "peer": ["user", entity.id, entity.access_hash or 0],  # định danh để chặn bot, lấy sẵn từ hội thoại
+                        "title": bot_name(entity),
+                        "type": BOT_TYPE,
+                        "participants": None,
+                        "username": entity.username or "",
+                        "date": date,
+                    })
+                continue
             if not isinstance(entity, (Channel, Chat)) or entity.left:
                 continue
             if isinstance(entity, Chat):
@@ -194,10 +223,16 @@ class TelegramManager:
                 "type": item_type,
                 "participants": getattr(entity, "participants_count", None),
                 "username": getattr(entity, "username", "") or "",
-                "date": dialog.date.astimezone().strftime("%d/%m/%Y %H:%M") if dialog.date else "",
+                "date": date,
             })
 
-        return sorted(groups_channels, key=lambda x: x["title"].lower())
+        return (sorted(groups_channels, key=lambda x: x["title"].lower()),
+                sorted(bots, key=lambda x: x["title"].lower()))
+
+    async def get_groups_and_channels(self):
+        """Chỉ lấy nhóm và kênh, xem get_dialog_lists"""
+        groups, _ = await self.get_dialog_lists()
+        return groups
 
 
 async def resolve_username(client, name):
@@ -853,4 +888,85 @@ def leave_items(manager, items, delete_chat, text, posted, on_status, on_record,
             if item["id"] not in final:
                 final[item["id"]] = _interrupted_result(item, item["id"] in posted)
         on_record(ordered(), posted)
+    return ordered()
+
+
+# --- Bot trong danh sách trò chuyện ---
+
+def bot_name(user):
+    """Tên hiển thị của bot: họ tên, nếu không có thì dùng username, cuối cùng là ID"""
+    name = " ".join(p for p in (user.first_name, user.last_name) if p).strip()
+    return name or user.username or str(user.id)
+
+
+def _call_failure(e):
+    """Kết quả lỗi của một lời gọi Telegram, cùng dạng với kết quả của tiến trình con khi rời nhóm"""
+    return {"ok": False, "error": type(e).__name__, "text": str(e), "seconds": getattr(e, "seconds", None)}
+
+
+async def _block_bot(client, item, delete_history):
+    """Chặn một bot. Nếu được yêu cầu thì xóa lịch sử chat với bot, chỉ trong tài khoản của bạn"""
+    peer = InputPeerUser(user_id=item["peer"][1], access_hash=item["peer"][2])
+    try:
+        await client(functions.contacts.BlockRequest(id=peer))
+    except Exception as e:
+        return _call_failure(e)
+    result = {"ok": True}
+    if delete_history:
+        try:
+            await client(functions.messages.DeleteHistoryRequest(peer, 0, revoke=False))
+            result["history"] = True
+        except Exception as e:
+            result["history_error"] = _call_failure(e)
+    return result
+
+
+def _block_result(item, r, tries):
+    """Kết quả cuối của một bot để hiện trên trang, sau một lần thử hoặc khi hết lượt thử"""
+    if is_wait_error(r):
+        return _result(item, False, f"Chưa chặn, Telegram vẫn giới hạn sau {tries} lần thử. {leave_error_text(r)}", False)
+    if not r.get("ok"):
+        return _result(item, False, leave_error_text(r), False)
+    if r.get("history_error"):
+        message = f"Đã chặn bot, nhưng chưa xóa được lịch sử. {leave_error_text(r['history_error'])}"
+    elif r.get("history"):
+        message = "Đã chặn bot và xóa lịch sử chat."
+    else:
+        message = "Đã chặn bot."
+    return _result(item, True, message, False)
+
+
+def block_items(manager, items, delete_history, on_status, on_record, halt):
+    """Chặn các bot đã chọn, lần lượt từng bot trên kết nối chính. Khi Telegram yêu cầu chờ thì tự chờ đúng số giây
+    đó rồi thử lại, như khi rời nhóm. halt: khi được đặt thì không bắt đầu bot kế tiếp.
+    on_status(text, fraction) báo tiến trình, on_record(results) được gọi sau mỗi bot và khi kết thúc.
+    Trả về kết quả theo đúng thứ tự items"""
+    final = {}
+
+    def ordered():
+        return [final[item["id"]] for item in items if item["id"] in final]
+
+    try:
+        for index, item in enumerate(items):
+            tries, r = 0, None
+            while not halt.is_set():
+                tries += 1
+                on_status(f"Đang chặn bot ({index + 1}/{len(items)}). Đừng thao tác gì trong lúc chạy.",
+                          index / len(items))
+                r = run_async(_block_bot(manager.client, item, delete_history))
+                if not is_wait_error(r) or tries >= LEAVE_MAX_ATTEMPTS:
+                    break
+                _wait_until(time.monotonic() + int(r["seconds"]) + FLOOD_MARGIN,
+                            "Telegram yêu cầu chờ, ứng dụng sẽ tự chặn tiếp sau khi hết thời gian.", on_status, halt)
+                r = None  # chưa có kết quả, sau khi chờ sẽ thử lại
+            if r is None:
+                break  # bị ngắt trước khi có kết quả: các bot còn lại được báo là chưa chặn
+            final[item["id"]] = _block_result(item, r, tries)
+            on_record(ordered())
+    finally:
+        # Bị ngắt thì báo rõ các bot chưa chặn, để người dùng biết cần bấm lại
+        for item in items:
+            if item["id"] not in final:
+                final[item["id"]] = _result(item, False, "Chưa chặn: thao tác bị ngắt trước khi làm. Bấm lại để tiếp tục.", False)
+        on_record(ordered())
     return ordered()
