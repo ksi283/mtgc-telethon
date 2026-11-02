@@ -104,7 +104,7 @@ Tiến trình con khi rời nhóm được chạy lại từ chính file exe, n�
 
 - Logic (`core.py`) đã kiểm thử bằng client giả: chia đợt, tin nhắn chỉ gửi một lần, xóa lịch sử, ngắt giữa chừng, thử lại khi bị giới hạn, quét thành viên, QR, đăng nhập lại và kiểm tra thông tin đăng nhập.
 - Giao diện đã kiểm thử bằng client giả: đăng nhập bằng QR (không cần số điện thoại) và bằng mã xác thực, khôi phục phiên, danh sách, tìm kiếm, chọn, hộp xác nhận rời nhóm, quét thành viên và đăng xuất. Chạy trên WSL (cửa sổ thật và cửa sổ ẩn) và trên Windows (dashboard).
-- **Chưa kiểm chứng với tài khoản Telegram thật**: đăng nhập thật, quét QR bằng điện thoại thật, rời nhóm thật. Menu khay hệ thống (Mở/Đóng ứng dụng) và hộp xác nhận đóng ứng dụng chưa được kiểm thử tự động trên Windows. Trước khi rời một danh sách lớn, hãy thử với 2–3 nhóm.
+- **Đã chạy với tài khoản Telegram thật và thành công.** Menu khay hệ thống (Mở/Đóng ứng dụng) và hộp xác nhận đóng ứng dụng chưa được kiểm thử tự động trên Windows. Khi rời một danh sách lớn, nên thử với 2–3 nhóm trước.
 - Repo chưa có bộ test tự động.
 
 ## Icon
