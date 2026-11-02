@@ -1,6 +1,6 @@
 [project]
 name = "mtgc-telethon"
-version = "0.1.1"
+version = "0.1.2"
 description = "Manage Telegram Groups/Channels"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -115,6 +115,11 @@ class App:
         self.qr_temp = None  # file session tạm của phiên QR, chuyển sang file chính sau khi xác nhận
         self.leave_halt = None  # Event của lần rời đang chạy, None nếu không chạy
         self.query = ""  # từ khóa đã áp dụng ở tab nhóm & kênh (đổi khi nhấn Enter)
+        self.bots = None  # bot trong danh sách trò chuyện, tải cùng nhóm và kênh; None = chưa tải
+        self.bot_selected = set()  # id bot đã chọn ở tab Bot Telegram
+        self.bot_query = ""  # từ khóa đã áp dụng ở tab Bot Telegram (đổi khi nhấn Enter)
+        self.last_result_kind = "leave"  # "leave" hoặc "block": kết quả đang hiện là của thao tác nào
+        self.bulk_name = ""  # tên thao tác đang chạy, dùng khi hỏi xác nhận đóng ứng dụng
         self._pump_id = None
         self._qr_poll_id = None  # lịch kiểm tra QR mỗi giây, hủy khi đóng cửa sổ
         self._build_fonts()
@@ -333,7 +338,8 @@ class App:
         self.show_window()
         question = "Bạn có chắc muốn đóng TelegramManager?"
         if self.leave_halt is not None:
-            question += "\n\nĐang rời nhóm, thao tác đó sẽ bị dừng lại. Các mục đã rời vẫn đã rời trên Telegram."
+            question += (f"\n\nĐang {self.bulk_name}, thao tác đó sẽ bị dừng lại. "
+                         "Các mục đã xong vẫn giữ nguyên trên Telegram.")
         if not messagebox.askyesno("Đóng ứng dụng", question, parent=self.root):
             return
         if self.leave_halt is not None:
@@ -400,7 +406,7 @@ class App:
         ttk.Label(form, text="Số điện thoại", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=5)
         self.phone_entry = ttk.Entry(form, textvariable=self.phone_var, width=34)
         self.phone_entry.grid(row=2, column=1, sticky="w", padx=(14, 0), pady=5)
-        ttk.Label(form, text="Ví dụ: +84912345678", style="Card.Muted.TLabel").grid(row=2, column=2, sticky="w", padx=10)
+        ttk.Label(form, text="Ví dụ: +84912345678 (để trống nếu dùng QR)", style="Card.Muted.TLabel").grid(row=2, column=2, sticky="w", padx=10)
         # Enter đi tiếp theo thứ tự ô; ở ô số điện thoại thì Enter gửi mã
         self.api_id_entry.bind("<Return>", lambda e: self.api_hash_entry.focus_set())
         self.api_hash_entry.bind("<Return>", lambda e: self.phone_entry.focus_set())
@@ -431,6 +437,10 @@ class App:
         if self.busy:
             return
         phone = self.phone_var.get().strip().replace(" ", "")
+        if not phone:
+            # Không có số thì không nhận được mã, nên đăng nhập bằng QR (QR không cần số điện thoại)
+            self.on_qr_start()
+            return
         api_id, api_hash = self.api_id_var.get(), self.api_hash_var.get()
         errors = core.validate_login(api_id, api_hash, phone)
         if errors:
@@ -704,6 +714,8 @@ class App:
         self.phone = ""
         self.groups = None
         self.selected = set()
+        self.bots = None
+        self.bot_selected = set()
         self.posted = set()
         self.last_result = None
         self.scan = None
@@ -780,9 +792,10 @@ class App:
         self.result_text.pack(fill="x", pady=(6, 6))
         ttk.Button(self.result_frame, text="Đóng thông báo", command=self.on_close_result).pack(anchor="e")
 
+        name, version = core.project_info()
         footer = ttk.Label(
             frame,
-            text="© 2026 by ksi283.",
+            text=f"{name} v{version} · © 2026 by ksi283" if version else f"{name} · © 2026 by ksi283",
             style="Hint.TLabel", wraplength=1000, justify="left",
         )
         self.footer = footer
@@ -790,10 +803,13 @@ class App:
 
         self.tabs = ttk.Notebook(frame)
         tab_list = ttk.Frame(self.tabs, padding=12)
+        tab_bots = ttk.Frame(self.tabs, padding=12)
         tab_people = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(tab_list, text="Nhóm & kênh")
+        self.tabs.add(tab_bots, text="Bot Telegram")
         self.tabs.add(tab_people, text="Tìm theo tài khoản")
         self._build_list_tab(tab_list)
+        self._build_bot_tab(tab_bots)
         self._build_people_tab(tab_people)
         self.tabs.pack(fill="both", expand=True, pady=(10, 0))
         return frame
@@ -858,8 +874,9 @@ class App:
         )
         self.tree.bind("<Button-1>", lambda e: self.on_tree_click(e, self.tree, self.toggle_group_pick))
 
+        # Thanh hành động và ghi chú được đóng gói ở đáy trước bảng, để bảng co lại chứ không đẩy nút ra ngoài màn hình
         chosen = ttk.Frame(parent, padding=(0, 10, 0, 0))
-        chosen.pack(fill="x")
+        chosen.pack(side="bottom", fill="x", before=tree_frame)
         self.chosen_var = tk.StringVar()
         ttk.Label(chosen, textvariable=self.chosen_var).pack(anchor="w")
         actions = ttk.Frame(chosen)
@@ -872,7 +889,61 @@ class App:
                                      command=lambda: self.on_leave_selected(True))
         self.delete_btn.pack(side="left", padx=8)
         ttk.Label(parent, text="Rời nhóm hoặc kênh có thể khiến bạn phải được mời lại để tham gia.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(10, 0))
+                  style="Muted.TLabel").pack(side="bottom", anchor="w", pady=(10, 0), before=chosen)
+
+    def _build_bot_tab(self, parent):
+        ttk.Label(parent, text="Bot trong danh sách trò chuyện của bạn. Chặn bot thì bot không gửi tin nhắn cho bạn nữa.",
+                  style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
+        top = ttk.Frame(parent)
+        top.pack(fill="x", pady=(10, 0))
+        ttk.Label(top, text="Tìm kiếm").pack(side="left")
+        self.bot_search_var = tk.StringVar()
+        self.bot_search_entry = ttk.Entry(top, textvariable=self.bot_search_var, width=48)
+        self.bot_search_entry.pack(side="left", padx=8)
+        self.bot_search_entry.bind("<Return>", lambda e: self.on_bot_search())
+        ttk.Label(top, text="Tên bot, @username, link t.me/... hoặc ID. Nhấn Enter để tìm.",
+                  style="Muted.TLabel").pack(side="left")
+
+        info = ttk.Frame(parent)
+        info.pack(fill="x", pady=(10, 6))
+        self.bot_visible_var = tk.StringVar()
+        ttk.Label(info, textvariable=self.bot_visible_var).pack(side="left")
+        self.bot_select_all_btn = ttk.Button(info, command=self.on_bot_select_all)
+        self.bot_select_all_btn.pack(side="left", padx=(12, 0))
+        self.bot_clear_btn = ttk.Button(info, text="Bỏ chọn tất cả", command=self.on_bot_clear_all)
+        self.bot_clear_btn.pack(side="left", padx=8)
+
+        self.bot_empty_var = tk.StringVar()
+        self.bot_empty = ttk.Label(parent, textvariable=self.bot_empty_var, style="Muted.TLabel",
+                                   wraplength=900, justify="left")
+
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill="both", expand=True)
+        self.bot_tree = self._make_tree(
+            tree_frame,
+            ("pick", "title", "username", "date"),
+            ("Chọn", "Tên bot", "Username", "Tin nhắn gần nhất"),
+            (60, 330, 230, 160),
+        )
+        self.bot_tree.bind("<Button-1>", lambda e: self.on_tree_click(e, self.bot_tree, self.toggle_bot_pick))
+
+        # Thanh hành động và ghi chú được đóng gói ở đáy trước bảng, để bảng co lại chứ không đẩy nút ra ngoài màn hình
+        chosen = ttk.Frame(parent, padding=(0, 10, 0, 0))
+        chosen.pack(side="bottom", fill="x", before=tree_frame)
+        self.bot_chosen_var = tk.StringVar()
+        ttk.Label(chosen, textvariable=self.bot_chosen_var).pack(anchor="w")
+        actions = ttk.Frame(chosen)
+        actions.pack(anchor="w", pady=(8, 0))
+        # Chặn giữ lịch sử là thao tác thường (nút chính xanh); xóa lịch sử là thao tác không hoàn tác (nút đỏ)
+        self.block_btn = ttk.Button(actions, text="Chặn bot, giữ lịch sử", style="Accent.TButton", width=24,
+                                    command=lambda: self.on_block_selected(False))
+        self.block_btn.pack(side="left")
+        self.block_delete_btn = ttk.Button(actions, text="Chặn và xóa lịch sử chat", style="Danger.TButton", width=26,
+                                           command=lambda: self.on_block_selected(True))
+        self.block_delete_btn.pack(side="left", padx=8)
+        ttk.Label(parent, text="Bot bị chặn vẫn còn trên Telegram. Có thể bỏ chặn sau này trong Cài đặt Telegram, "
+                               "phần người bị chặn.", style="Muted.TLabel").pack(side="bottom", anchor="w", pady=(10, 0),
+                                                                              before=chosen)
 
     def _build_people_tab(self, parent):
         # Bố cục gọn để bảng kết quả luôn có đủ chỗ: mô tả một dòng, ô nhập và nút quét cùng hàng
@@ -912,7 +983,7 @@ class App:
 
         # Thao tác với kết quả quét: hàng trên là chọn và rời, hàng dưới là các việc phụ
         row1 = ttk.Frame(self.scan_body)
-        row1.pack(anchor="w", pady=(8, 0))
+        row1.pack(side="bottom", anchor="w", pady=(8, 0), before=self.scan_tree_holder)
         self.scan_all_btn = ttk.Button(row1, text="Chọn tất cả", command=self.on_scan_select_all)
         self.scan_all_btn.pack(side="left")
         self.scan_clear_btn = ttk.Button(row1, text="Bỏ chọn", command=self.on_scan_clear_picks)
@@ -923,7 +994,7 @@ class App:
         self.scan_delete_btn.pack(side="left", padx=8)
 
         row2 = ttk.Frame(self.scan_body)
-        row2.pack(anchor="w", pady=(4, 0))
+        row2.pack(side="bottom", anchor="w", pady=(4, 0), before=row1)
         self.scan_unchecked_btn = ttk.Button(row2, style="Link.TButton", command=self.on_show_unchecked)
         self.scan_unchecked_btn.pack(side="left")
         ttk.Button(row2, text="Xóa kết quả quét", command=self.on_clear_scan).pack(side="left", padx=8)
@@ -934,19 +1005,23 @@ class App:
         if self.groups is not None or self.busy:
             return
         self.busy = True
-        self.set_status("Đang tải danh sách nhóm và kênh...")
+        self.set_status("Đang tải danh sách nhóm, kênh và bot...")
         self.refresh_dashboard()
-        self.background(
-            lambda: core.add_labels(core.run_async(self.manager.get_groups_and_channels())),
-            self.on_groups_loaded,
-            self.on_groups_failed,
-        )
+        self.background(self.fetch_lists, self.on_groups_loaded, self.on_groups_failed)
 
-    def on_groups_loaded(self, groups):
+    def fetch_lists(self):
+        """Chạy ở luồng nền: lấy hội thoại, rồi gắn nhãn hiển thị cho nhóm, kênh và bot"""
+        groups, bots = core.run_async(self.manager.get_dialog_lists())
+        return core.add_labels(groups), core.add_labels(bots)
+
+    def on_groups_loaded(self, lists):
+        groups, bots = lists
         self.busy = False
         self.set_status("")
         self.groups = groups
+        self.bots = bots
         self.selected &= {g["id"] for g in groups}
+        self.bot_selected &= {b["id"] for b in bots}
         self.refresh_dashboard()
 
     def on_groups_failed(self, e):
@@ -987,10 +1062,12 @@ class App:
             self.result_frame.pack_forget()
             return
         groups = self.groups
+        bots = self.bots or []
         groups_count = sum(g["type"] == "Group" for g in groups)
-        self.stats_var.set(f"Nhóm: {groups_count}     Kênh: {len(groups) - groups_count}     Tổng cộng: {len(groups)}")
+        self.stats_var.set(f"Nhóm: {groups_count}     Kênh: {len(groups) - groups_count}     "
+                           f"Tổng cộng: {len(groups)}     Bot: {len(bots)}")
         self.render_result()
-        if not groups:
+        if not groups and not bots:
             self.dash_message_var.set("Tài khoản này chưa tham gia nhóm hoặc kênh nào.")
             self.dash_message.pack(anchor="w", pady=(8, 0), before=self.footer)
             self.tabs.pack_forget()
@@ -998,6 +1075,7 @@ class App:
         self.dash_message.pack_forget()
         self.tabs.pack(fill="both", expand=True, pady=(10, 0))
         self.refresh_list()
+        self.refresh_bots()
         self.render_scan()
 
     def render_result(self):
@@ -1005,13 +1083,18 @@ class App:
         if not results:
             self.result_frame.pack_forget()
             return
+        if self.last_result_kind == "block":
+            title, verb, undone = "Kết quả lần chặn gần nhất", "chặn", "chưa chặn"
+        else:
+            title, verb, undone = "Kết quả lần rời gần nhất", "rời", "chưa rời"
+        self.result_frame.configure(text=title)
         failed = [r for r in results if not r["ok"]]
         if failed:
-            summary = (f"Đã rời {len(results) - len(failed)}/{len(results)} mục, còn {len(failed)} mục chưa rời. "
-                       "Xem lý do bên dưới. Các mục chưa rời vẫn được giữ lựa chọn để bạn thử lại.")
+            summary = (f"Đã {verb} {len(results) - len(failed)}/{len(results)} mục, còn {len(failed)} mục {undone}. "
+                       f"Xem lý do bên dưới. Các mục {undone} vẫn được giữ lựa chọn để bạn thử lại.")
             self.result_summary.configure(text=summary, foreground=MESSAGE_COLORS["warn"])
         else:
-            self.result_summary.configure(text=f"Đã rời thành công {len(results)}/{len(results)} mục.",
+            self.result_summary.configure(text=f"Đã {verb} thành công {len(results)}/{len(results)} mục.",
                                           foreground=MESSAGE_COLORS["success"])
         self.result_text.configure(state="normal", height=min(max(len(results), 2), 10))
         self.result_text.delete("1.0", "end")
@@ -1099,6 +1182,176 @@ class App:
     def on_leave_selected(self, delete_chat):
         items = [g for g in (self.groups or []) if g["id"] in self.selected]
         self.open_leave_dialog(items, delete_chat)
+
+    # --- Bot trong danh sách trò chuyện ---
+
+    def visible_bots(self):
+        q = core.normalize_query(self.bot_query)
+        return [b for b in (self.bots or []) if not q or core.matches_query(b, q)]
+
+    def refresh_bots(self):
+        if self.bots is None:
+            return
+        visible = self.visible_bots()
+        self.bot_tree.delete(*self.bot_tree.get_children())
+        for b in visible:
+            self.bot_tree.insert("", "end", iid=str(b["id"]), values=(
+                PICK_MARK if b["id"] in self.bot_selected else "",
+                b["label"],
+                f"https://t.me/{b['username']}" if b["username"] else "",
+                b["date"],
+            ))
+        self.bot_visible_var.set(f"Hiển thị {len(visible)} / {len(self.bots)} bot")
+        self.update_bot_actions(visible)
+
+    def update_bot_actions(self, visible):
+        chosen = [b for b in (self.bots or []) if b["id"] in self.bot_selected]
+        self.bot_select_all_btn.configure(text=f"Chọn tất cả ({len(visible)})")
+        self.bot_select_all_btn.state(["!disabled"] if visible else ["disabled"])
+        self.bot_clear_btn.state(["!disabled"] if self.bot_selected else ["disabled"])
+        if chosen:
+            self.bot_chosen_var.set(f"Đã chọn {len(chosen)} bot. Bạn muốn làm gì với các bot này?")
+        else:
+            self.bot_chosen_var.set("Tích chọn các bot muốn chặn ở bảng trên, rồi chọn hành động.")
+        enabled = ["!disabled"] if chosen else ["disabled"]
+        self.block_btn.state(enabled)
+        self.block_delete_btn.state(enabled)
+        if visible:
+            self.bot_empty.pack_forget()
+            return
+        if self.bots:
+            text = "Không tìm thấy bot nào khớp. Kiểm tra lại tên, @username hoặc ID."
+        else:
+            text = "Chưa có bot nào trong danh sách trò chuyện của bạn."
+        self.bot_empty_var.set(text)
+        self.bot_empty.pack(anchor="w", pady=(4, 0), before=self.bot_tree.master)
+
+    def toggle_bot_pick(self, bid):
+        if bid in self.bot_selected:
+            self.bot_selected.discard(bid)
+        else:
+            self.bot_selected.add(bid)
+        if self.bot_tree.exists(str(bid)):
+            self.bot_tree.set(str(bid), "pick", PICK_MARK if bid in self.bot_selected else "")
+        self.update_bot_actions(self.visible_bots())
+
+    def on_bot_search(self):
+        self.bot_query = self.bot_search_var.get()
+        self.refresh_bots()
+
+    def on_bot_select_all(self):
+        self.bot_selected |= {b["id"] for b in self.visible_bots()}
+        self.refresh_bots()
+
+    def on_bot_clear_all(self):
+        self.bot_selected = set()
+        self.refresh_bots()
+
+    def on_block_selected(self, delete_history):
+        items = [b for b in (self.bots or []) if b["id"] in self.bot_selected]
+        self.open_block_dialog(items, delete_history)
+
+    def open_block_dialog(self, items, delete_history):
+        """Hộp xác nhận chặn bot: liệt kê bot sẽ chặn, và xác nhận thêm nếu xóa lịch sử chat"""
+        if self.busy or self.leave_halt is not None or not items:
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Xác nhận chặn bot")
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+        dlg.configure(background=PALETTE["bg"])
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        body = ttk.Frame(dlg, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=f"Bạn sắp chặn {len(items)} bot:", style="Heading.TLabel").pack(anchor="w")
+        listing = tk.Text(body, height=min(len(items), 6), width=72, wrap="word")
+        style_text(listing)
+        for item in items:
+            handle = f" · @{item['username']}" if item["username"] else ""
+            listing.insert("end", f"- {item['label']}{handle}\n")
+        listing.configure(state="disabled")
+        listing.pack(fill="x", pady=(6, 10))
+
+        understood_var = tk.BooleanVar(value=False)
+        confirm_btn = None
+
+        def refresh_confirm():
+            if confirm_btn is not None:
+                confirm_btn.state(["!disabled"] if not delete_history or understood_var.get() else ["disabled"])
+
+        if delete_history:
+            ttk.Label(body, text="Lịch sử chat với các bot này sẽ bị xóa khỏi tài khoản của bạn.",
+                      style="Danger.TLabel").pack(anchor="w")
+            ttk.Checkbutton(body, text="Tôi hiểu và muốn xóa lịch sử chat", variable=understood_var,
+                            command=refresh_confirm).pack(anchor="w", pady=(4, 0))
+        ttk.Label(body, text="Bot bị chặn không gửi tin nhắn cho bạn nữa. Có thể bỏ chặn sau này trong Cài đặt Telegram, "
+                             "phần người bị chặn.", style="Muted.TLabel", wraplength=640, justify="left"
+                  ).pack(anchor="w", pady=(8, 0))
+        ttk.Label(body, text="Ứng dụng chặn từng bot một. Nếu Telegram yêu cầu chờ, ứng dụng tự chờ rồi chặn tiếp. "
+                             "Giữ ứng dụng mở trong lúc chạy.", style="Muted.TLabel", wraplength=640, justify="left"
+                  ).pack(anchor="w", pady=(4, 10))
+
+        def confirm():
+            dlg.destroy()
+            self.start_block(items, delete_history)
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Hủy", width=12, command=dlg.destroy).pack(side="left")
+        confirm_btn = ttk.Button(buttons, text="Chặn và xóa lịch sử" if delete_history else "Chặn bot",
+                                 style="Danger.TButton" if delete_history else "Accent.TButton", width=22, command=confirm)
+        confirm_btn.pack(side="right")
+        refresh_confirm()
+        try:
+            dlg.grab_set()
+        except tk.TclError:
+            pass  # cửa sổ chưa hiện trên màn hình (ví dụ khi kiểm thử), không cần khóa đầu vào
+
+    def start_block(self, items, delete_history):
+        """Chặn bot ở luồng nền. Kết quả từng bot được đưa về giao diện khi chạy"""
+        halt = threading.Event()
+        self.leave_halt = halt  # dùng chung cờ dừng với việc rời nhóm, để đóng ứng dụng dừng việc đang chạy
+        self.bulk_name = "chặn bot"
+        self.busy = True
+        self.show_message("")
+        self.show_progress(True, "Đang chặn bot...")
+        self.set_status("Đang chặn bot. Đừng thao tác gì trong lúc chạy.")
+
+        def on_status(msg, fraction):
+            self.post(lambda m=msg, f=fraction: self.update_progress(m, f))
+
+        def on_record(results):
+            self.post(lambda r=list(results): self.apply_block_record(r))
+
+        def done(_results):
+            self.leave_halt = None
+            self.bulk_name = ""
+            self.busy = False
+            self.set_status("")
+            self.show_progress(False)
+            self.groups = None  # tải lại để danh sách khớp với Telegram
+            self.load_groups()
+
+        def fail(e):
+            self.leave_halt = None
+            self.bulk_name = ""
+            self.show_progress(False)
+            self.show_error(e)
+            self.groups = None
+            self.load_groups()
+
+        self.background(
+            lambda: core.block_items(self.manager, items, delete_history, on_status, on_record, halt),
+            done, fail,
+        )
+
+    def apply_block_record(self, results):
+        """Cập nhật lựa chọn và kết quả sau mỗi bot, kể cả khi thao tác bị ngắt"""
+        done_ids = {r["id"] for r in results if r["ok"]}
+        self.bot_selected -= done_ids
+        self.last_result = results
+        self.last_result_kind = "block"
+        self.refresh_dashboard()
 
     # --- Quét thành viên ---
 
@@ -1344,6 +1597,7 @@ class App:
         """Chạy việc rời nhóm ở luồng nền. Tiến trình và kết quả từng đợt được đưa về giao diện khi chạy"""
         halt = threading.Event()
         self.leave_halt = halt
+        self.bulk_name = "rời nhóm và kênh"
         self.busy = True
         self.show_message("")
         self.show_progress(True, "Đang rời nhóm, kênh...")
@@ -1358,6 +1612,7 @@ class App:
 
         def done(_results):
             self.leave_halt = None
+            self.bulk_name = ""
             self.busy = False
             self.set_status("")
             self.show_progress(False)
@@ -1366,6 +1621,7 @@ class App:
 
         def fail(e):
             self.leave_halt = None
+            self.bulk_name = ""
             self.show_progress(False)
             self.show_error(e)
             self.groups = None
@@ -1387,6 +1643,7 @@ class App:
         if self.scan is not None:
             self.scan["groups"] = [g for g in self.scan["groups"] if g["id"] not in done_ids]
         self.last_result = results
+        self.last_result_kind = "leave"
         self.refresh_dashboard()
         self.render_scan()
 

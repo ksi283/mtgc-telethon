@@ -101,6 +101,10 @@ def selftest():
         root = tkinter.Tk()
         root.withdraw()
         app = gui.App(root, restore=False)
+        # Chân cửa sổ phải hiện phiên bản, nên pyproject.toml phải được đóng gói kèm
+        _, version = core.project_info()
+        if not version or version not in app.footer.cget("text"):
+            raise RuntimeError(f"Chân cửa sổ không hiện phiên bản: {app.footer.cget('text')!r}")
         app.close()
         return 0
     except Exception:
