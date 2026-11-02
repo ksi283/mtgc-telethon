@@ -1,7 +1,7 @@
 """Tiến trình con để rời nhóm/kênh hoặc tìm thành viên.
 
-Mỗi tiến trình con là một tiến trình Python riêng chạy file này, không phải bản fork của Streamlit,
-nên không import lại Streamlit và không dùng chung luồng hay khóa với tiến trình chính.
+Mỗi tiến trình con là một tiến trình Python riêng chạy file này, không phải bản sao của giao diện,
+nên không dùng chung luồng hay khóa với tiến trình chính.
 Mỗi tiến trình con có một kết nối Telegram riêng, dựng từ cùng auth key và DC của phiên chính,
 chỉ giữ trong bộ nhớ nên không ghi vào file SQLite của phiên chính.
 
