@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Phiên đăng nhập Telegram và thông tin tài khoản (nhạy cảm, không commit)
+# local files
 *.session
 *.session-journal
 *.session.bak
 account.json
+# *.json
+# *.md
+# !README.md

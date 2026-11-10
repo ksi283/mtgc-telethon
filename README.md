@@ -118,3 +118,13 @@ Tiến trình con khi rời nhóm được chạy lại từ chính file exe, n�
 ## Icon
 
 Icon ứng dụng lấy từ Flaticon: https://www.flaticon.com/free-icon/telegram_7301275
+
+## Giấy phép
+
+Dự án được phát hành theo **GNU General Public License phiên bản 3 (GPLv3)**. Toàn văn giấy phép nằm trong file [LICENSE](LICENSE).
+
+- Bản quyền © 2026 ksi283.
+- Bạn được chạy, nghiên cứu, chỉnh sửa và phân phối lại phần mềm theo các điều khoản của GPLv3.
+- Khi phân phối lại, kể cả bản đã build thành file exe, phải kèm giấy phép và cung cấp mã nguồn tương ứng. Mã nguồn: https://github.com/ksi283/mtgc-telethon
+- Phần mềm không đi kèm bất kỳ bảo đảm nào.
+- Icon trong `assets/` lấy từ Flaticon nên vẫn theo điều khoản của Flaticon, không thuộc GPLv3 của dự án.
