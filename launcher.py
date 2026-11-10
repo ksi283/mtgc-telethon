@@ -105,6 +105,9 @@ def selftest():
         _, version = core.project_info()
         if not version or version not in app.footer.cget("text"):
             raise RuntimeError(f"Chân cửa sổ không hiện phiên bản: {app.footer.cget('text')!r}")
+        # Giấy phép GPLv3 phải đi kèm mọi bản đóng gói
+        if not os.path.isfile(os.path.join(bundle_dir(), "LICENSE")):
+            raise RuntimeError("Thiếu file LICENSE trong bản đóng gói")
         app.close()
         return 0
     except Exception:

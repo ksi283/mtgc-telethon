@@ -31,7 +31,8 @@ a = Analysis(
     pathex=[ROOT],
     binaries=telethon_binaries,
     datas=telethon_datas + [(os.path.join(ROOT, "assets"), "assets"),
-                            (os.path.join(ROOT, "pyproject.toml"), ".")],  # tên và phiên bản hiện trên chân cửa sổ
+                            (os.path.join(ROOT, "pyproject.toml"), "."),
+                            (os.path.join(ROOT, "LICENSE"), ".")],
     hiddenimports=hiddenimports,
     hookspath=[],
     excludes=EXCLUDES,
