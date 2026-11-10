@@ -1,6 +1,6 @@
 [project]
 name = "mtgc-telethon"
-version = "0.1.2"
+version = "1.0.0"
 description = "Manage Telegram Groups/Channels"
 readme = "README.md"
 license = "GPL-3.0-only"

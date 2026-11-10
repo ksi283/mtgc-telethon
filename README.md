@@ -10,7 +10,7 @@
 
 ## Chạy trên Windows (không cần cài Python)
 
-1. Tải file `TelegramManager-<phiên bản>.exe` của bản release, ví dụ `TelegramManager-0.1.2.exe`. Đây là một file duy nhất, không cần thư mục đi kèm.
+1. Tải file `TelegramManager-<phiên bản>.exe` của bản release, ví dụ `TelegramManager-1.0.0.exe`. Đây là một file duy nhất, không cần thư mục đi kèm.
 2. Chạy file đó. Lần mở đầu có thể mất vài giây để giải nén vào thư mục tạm. Cửa sổ ứng dụng hiện ra, và biểu tượng TelegramManager nằm trong khay hệ thống (góc phải thanh tác vụ). Nếu không thấy biểu tượng, bấm mũi tên ^ trên khay hệ thống.
 3. Nút X của cửa sổ chỉ ẩn cửa sổ, ứng dụng vẫn chạy (ví dụ đang rời nhóm). Để mở lại, bấm biểu tượng trong khay rồi chọn **Mở ứng dụng**. Để thoát, chọn **Đóng ứng dụng** và xác nhận. Nếu đang rời nhóm, thao tác đó sẽ bị dừng lại.
 4. Nếu mở ứng dụng lần hai, bạn sẽ thấy thông báo rằng ứng dụng đã đang chạy.
@@ -88,7 +88,7 @@ Kết quả là `dist\TelegramManager-<phiên bản>.exe`, một file duy nhất
 Sau khi build, kiểm tra nhanh bằng:
 
 ```bat
-dist\TelegramManager-0.1.2.exe --selftest
+dist\TelegramManager-1.0.0.exe --selftest
 echo %ERRORLEVEL%
 ```
 
